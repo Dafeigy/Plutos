@@ -8,14 +8,44 @@ lock-protected dict and provides async subscribe-on-first-request semantics.
 
 import asyncio
 import logging
+import os
 import threading
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 from openctp_ctp import thostmduserapi as mdapi
 
 from .bridge import CTPError
 
+
+def _copy_ctp_struct(item) -> SimpleNamespace:
+    """Deep-copy a CTP swig struct into a plain Python object.
+
+    CTP reuses the underlying C memory after callbacks return.  Storing a
+    reference to the swig wrapper means later reads may see overwritten /
+    garbage data from a subsequent callback.  We must extract every field
+    immediately while the callback is still on the stack.
+
+    Returns a SimpleNamespace so existing ``item.SomeField`` dot-access
+    continues to work everywhere.
+    """
+    data = {}
+    for attr in dir(item):
+        if attr.startswith("_") or attr.startswith("this"):
+            continue
+        try:
+            val = getattr(item, attr)
+            if not callable(val):
+                data[attr] = val
+        except Exception:
+            continue
+    return SimpleNamespace(**data)
+
 logger = logging.getLogger(__name__)
+
+# Dedicated flow directory so MdApi and TraderApi don't corrupt each other's
+# flow files (they share filenames like TradingDay.con, DialogRsp.con, etc.)
+_MD_FLOW_DIR = os.path.join(os.getcwd(), "flow", "md")
 
 
 class MdClient(mdapi.CThostFtdcMdSpi):
@@ -31,8 +61,9 @@ class MdClient(mdapi.CThostFtdcMdSpi):
         super().__init__()
         self._settings = settings
 
-        # Thread-safe price cache
-        self._cache: dict[str, mdapi.CThostFtdcDepthMarketDataField] = {}
+        # Thread-safe price cache — stores SimpleNamespace snapshots (not raw
+        # CTP swig wrappers) so values survive across callback memory reuse.
+        self._cache: dict[str, SimpleNamespace] = {}
         self._cache_lock = threading.Lock()
 
         # Pending subscription futures (instrument_id → Future)
@@ -42,15 +73,28 @@ class MdClient(mdapi.CThostFtdcMdSpi):
 
         self._login_future: Future | None = None
 
-        # Create and configure the CTP MdApi instance
-        self.api: mdapi.CThostFtdcMdApi = mdapi.CThostFtdcMdApi.CreateFtdcMdApi()
-        self.api.RegisterSpi(self)
+        # Ensure the flow directory exists before creating the API — otherwise
+        # CTP segfaults trying to open flow files in a non-existent directory.
+        os.makedirs(_MD_FLOW_DIR, exist_ok=True)
+
+        # Create and configure the CTP MdApi instance.
+        # RegisterFront must come BEFORE RegisterSpi for MdApi — the official
+        # md_demo.py does it in this order, and reversing it causes
+        # OnFrontConnected to never fire.
+        self.api: mdapi.CThostFtdcMdApi = mdapi.CThostFtdcMdApi.CreateFtdcMdApi(
+            _MD_FLOW_DIR
+        )
         self.api.RegisterFront(settings.MD_FRONT)
+        self.api.RegisterSpi(self)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def init(self) -> None:
         """Initiate connection to market data front (blocking)."""
+        # Create the login future BEFORE Init() so it's guaranteed to exist
+        # when CTP callbacks fire (they run on CTP's internal threads).
+        if self._login_future is None:
+            self._login_future = Future()
         self.api.Init()
 
     def release(self) -> None:
@@ -65,7 +109,8 @@ class MdClient(mdapi.CThostFtdcMdSpi):
         Market data channel does not authenticate — login is sent with empty
         fields and simply confirms the connection is ready for subscriptions.
         """
-        self._login_future = Future()
+        if self._login_future is None:
+            raise RuntimeError("init() must be called before await_login()")
         result = self._login_future.result(timeout=timeout)
         if isinstance(result, Exception):
             raise result
@@ -96,17 +141,23 @@ class MdClient(mdapi.CThostFtdcMdSpi):
                 lf.set_exception(CTPError(pRspInfo.ErrorID, pRspInfo.ErrorMsg))
             return
 
-        logger.info(f"Market data login succeeded. TradingDay={pRspUserLogin.TradingDay}")
-        if bIsLast:
-            lf = self._login_future
-            if lf and not lf.done():
-                lf.set_result(True)
+        trading_day = pRspUserLogin.TradingDay if pRspUserLogin else "?"
+        logger.info(f"Market data login succeeded. TradingDay={trading_day}")
+        # NOTE: Resolve immediately on the first successful response, matching
+        # md_demo.py behaviour.  Do NOT wait for bIsLast — some CTP builds
+        # deliver the single login response with bIsLast=False.
+        lf = self._login_future
+        if lf and not lf.done():
+            lf.set_result(True)
 
     def OnRtnDepthMarketData(self, pDepthMarketData) -> None:
         """Push callback: a new market data tick arrived."""
-        instrument_id = pDepthMarketData.InstrumentID
+        # Copy immediately — CTP reuses the underlying C memory on the next
+        # tick, so storing the raw swig wrapper would corrupt cached data.
+        snapshot = _copy_ctp_struct(pDepthMarketData)
+        instrument_id = snapshot.InstrumentID
         with self._cache_lock:
-            self._cache[instrument_id] = pDepthMarketData
+            self._cache[instrument_id] = snapshot
 
         # Resolve any pending subscription Future for this instrument
         with self._pending_lock:

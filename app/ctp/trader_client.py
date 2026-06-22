@@ -11,14 +11,44 @@ the corresponding CTP callback.  Route handlers use asyncio.wrap_future().
 """
 
 import logging
+import os
 import threading
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 from openctp_ctp import thosttraderapi as tdapi
 
 from .bridge import CTPError, FutureStore, TraderState
 
+
+def _copy_ctp_struct(item) -> SimpleNamespace:
+    """Deep-copy a CTP swig struct into a plain Python object.
+
+    CTP reuses the underlying C memory after callbacks return.  Storing a
+    reference to the swig wrapper means later reads may see overwritten /
+    garbage data from a subsequent callback.  We must extract every field
+    immediately while the callback is still on the stack.
+
+    Returns a SimpleNamespace so existing ``item.SomeField`` dot-access
+    continues to work everywhere.
+    """
+    data = {}
+    for attr in dir(item):
+        if attr.startswith("_") or attr.startswith("this"):
+            continue
+        try:
+            val = getattr(item, attr)
+            if not callable(val):
+                data[attr] = val
+        except Exception:
+            continue
+    return SimpleNamespace(**data)
+
 logger = logging.getLogger(__name__)
+
+# Dedicated flow directory so TraderApi and MdApi don't corrupt each other's
+# flow files (they share filenames like TradingDay.con, DialogRsp.con, etc.).
+_TRADER_FLOW_DIR = os.path.join(os.getcwd(), "flow", "trader")
 
 
 class TraderClient(tdapi.CThostFtdcTraderSpi):
@@ -49,9 +79,13 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
 
         self._login_future: Future | None = None
 
+        # Ensure the flow directory exists before creating the API — otherwise
+        # CTP segfaults trying to open flow files in a non-existent directory.
+        os.makedirs(_TRADER_FLOW_DIR, exist_ok=True)
+
         # Create and configure the CTP API instance
         self.api: tdapi.CThostFtdcTraderApi = (
-            tdapi.CThostFtdcTraderApi.CreateFtdcTraderApi()
+            tdapi.CThostFtdcTraderApi.CreateFtdcTraderApi(_TRADER_FLOW_DIR)
         )
         self.api.RegisterSpi(self)
         self.api.RegisterFront(settings.TRADE_FRONT)
@@ -62,6 +96,10 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
 
     def init(self) -> None:
         """Initiate connection to CTP (blocking call, returns when connected)."""
+        # Create the login future BEFORE Init() so it's guaranteed to exist
+        # when CTP callbacks fire (they run on CTP's internal threads).
+        if self._login_future is None:
+            self._login_future = Future()
         self.api.Init()
 
     def release(self) -> None:
@@ -76,7 +114,8 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
         Must be called after init().  The CTP login sequence is:
         authenticate → login → settlement confirm.
         """
-        self._login_future = Future()
+        if self._login_future is None:
+            raise RuntimeError("init() must be called before await_login()")
         result = self._login_future.result(timeout=timeout)
         if isinstance(result, Exception):
             raise result
@@ -197,7 +236,10 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
             self._query_store.reject(nRequestID, pRspInfo.ErrorID, pRspInfo.ErrorMsg)
             return
         if item is not None:
-            self._query_store.accumulate(nRequestID, item)
+            # Copy immediately — CTP reuses the underlying C memory after
+            # this callback returns, so storing the raw swig wrapper would
+            # yield corrupted/garbage data when read later from the event loop.
+            self._query_store.accumulate(nRequestID, _copy_ctp_struct(item))
         if bIsLast:
             self._query_store.resolve_with_accumulator(nRequestID)
 
@@ -261,7 +303,8 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
             self._order_store.reject(nRequestID, pRspInfo.ErrorID, pRspInfo.ErrorMsg)
             return
         if pInputOrder is not None and bIsLast:
-            self._order_store.resolve_direct(nRequestID, pInputOrder)
+            # Copy immediately — same memory-reuse issue as query callbacks.
+            self._order_store.resolve_direct(nRequestID, _copy_ctp_struct(pInputOrder))
 
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
         """
