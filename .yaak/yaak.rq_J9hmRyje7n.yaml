@@ -1,0 +1,45 @@
+type: http_request
+model: http_request
+id: rq_J9hmRyje7n
+createdAt: 2026-06-22T16:13:29.213430600
+updatedAt: 2026-06-22T16:26:06.628843900
+workspaceId: wk_NS4Qph2XFE
+folderId: null
+authentication: {}
+authenticationType: null
+body:
+  text: |-
+    {
+      "instrument_id": "ag2607",
+      "direction": "sell",
+      "offset_flag": "open",
+      "price": 16485.0,
+      "volume": 1
+    }
+bodyType: application/json
+description: ''
+headers:
+- enabled: true
+  name: Content-Type
+  value: application/json
+  id: Wqk5Ti5Q3H
+method: POST
+name: 委托下单
+sortPriority: -1782131131389.0
+url: http://localhost:8000/order
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

@@ -1,0 +1,33 @@
+type: http_request
+model: http_request
+id: rq_bkSKmLMsub
+createdAt: 2026-06-22T12:25:31.392007400
+updatedAt: 2026-06-22T12:25:52.670062300
+workspaceId: wk_NS4Qph2XFE
+folderId: null
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers: []
+method: GET
+name: 健康检查
+sortPriority: -1782131131389.0
+url: http://localhost:8000/health
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

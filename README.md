@@ -215,3 +215,34 @@ Endpoint → 创建 Future → 调用 CTP API → await Future
 - CTP 同账号不可重复登录，一个时刻只能启动一个 Plutos 实例连接同一账号
 - 当前未实现自动断线重连，CTP 连接断开后需重启服务获取最新行情
 - `openctp-ctp` 的 `.so` 文件要求 Linux x86_64 环境，开发时请确认平台兼容
+- Linux下如果报错：
+  ```bash
+  terminate called after throwing an instance of 'std::runtime_error'
+  what():  locale::facet::_S_create_c_locale name not valid
+  Aborted
+  ```
+  这是因为需要安装 GB18030 字符集，Ubuntu 下可以这样操作：
+  ```bash
+  sudo apt-get install -y locales
+  sudo locale-gen zh_CN.GB18030
+  ```
+
+  Arch下面需要使用 sudo 权限打开 /etc/locale.gen 文件：
+  
+  ```bash
+  sudo nano /etc/locale.gen
+  ```
+  随后在文件中找到 #zh_CN.GB18030 GB18030 这一行，去掉行首的 # 注释符号，使其生效：
+
+  ```bash
+  # /etc/locale.gen
+
+  zh_CN.GB18030 GB18030  # 取消这一行的注释
+  zh_CN.UTF-8 UTF-8      # 建议同时启用 UTF-8
+  ```
+  注意：glibc（GNU C 库）是 Arch Linux 的默认组件，已包含 locale 生成工具，无需额外安装任何软件包。
+
+  最后保存文件后，执行以下命令生成新添加的 locale。
+  ```bash
+  sudo locale-gen
+  ```

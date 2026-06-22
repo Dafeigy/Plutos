@@ -1,0 +1,17 @@
+type: workspace
+model: workspace
+id: wk_NS4Qph2XFE
+createdAt: 2026-06-22T12:25:26.368365300
+updatedAt: 2026-06-22T16:11:53.402237200
+authentication: {}
+authenticationType: null
+description: ''
+headers: []
+name: Plutos
+encryptionKeyChallenge: eUE0azNuQwHnQkS5u1ZRkWijo8o4Irdo3nCRTAgQR9pxm8UbamECmHUj9PtLqRtMP2GydBTbnjXJj423KjUAx2X4EQ58BMfIaNpeGq6CG5OYK/FrcNDgePi/ycNblFvVb2I=
+settingValidateCertificates: true
+settingFollowRedirects: true
+settingRequestTimeout: 0
+settingDnsOverrides: []
+settingSendCookies: true
+settingStoreCookies: true

@@ -344,6 +344,24 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
             f"OrderStatus={pOrder.OrderStatus} StatusMsg={pOrder.StatusMsg}"
         )
 
+        # Resolve the pending order Future on the first status push.
+        # Some CTP environments (or network conditions) deliver order
+        # confirmation exclusively via OnRtnOrder rather than OnRspOrderInsert.
+        # Without this the Future sits unresolved until the 15 s timeout,
+        # returning HTTP 408 even though the order was accepted and may have
+        # already filled (as the user observed with AG2607).
+        snapshot = _copy_ctp_struct(pOrder)
+        # CThostFtdcOrderField exposes order state via OrderStatus;
+        # order.py reads OrderSubmitStatus.  Alias so both paths work.
+        snapshot.OrderSubmitStatus = snapshot.OrderStatus
+
+        found = self._order_store.resolve_by_order_ref(snapshot.OrderRef, snapshot)
+        if found:
+            logger.info(
+                f"Order {snapshot.OrderRef} resolved via OnRtnOrder push "
+                f"(SysID={snapshot.OrderSysID}, Status={snapshot.OrderStatus})"
+            )
+
     def OnRtnTrade(self, pTrade):
         """Push notification: trade fill."""
         logger.info(

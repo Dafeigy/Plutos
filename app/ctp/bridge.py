@@ -142,6 +142,25 @@ class FutureStore:
             return True
         return False
 
+    def resolve_by_order_ref(self, order_ref: str, result: Any) -> bool:
+        """
+        Resolve a Future by OrderRef (for OnRtnOrder push notifications).
+
+        Some CTP environments deliver order confirmation via OnRtnOrder pushes
+        rather than OnRspOrderInsert responses.  This lets the first status
+        push resolve the pending Future so the API doesn't time out at 15 s
+        when the order was actually accepted.
+
+        Returns True if a matching pending Future was found, False otherwise
+        (e.g. already resolved by OnRspOrderInsert, or stale OrderRef).
+        """
+        with self._lock:
+            request_id = self._order_ref_map.pop(order_ref, None)
+        if request_id is not None:
+            self.resolve_direct(request_id, result)
+            return True
+        return False
+
     # ── Cleanup ──────────────────────────────────────────────────────────
 
     def _cleanup_loop(self) -> None:

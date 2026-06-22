@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python -m py_compile app/ctp/trader_client.py)",
-      "Bash(python -m py_compile app/ctp/md_client.py)"
+      "Bash(python -m py_compile app/ctp/md_client.py)",
+      "Bash(python -m py_compile app/ctp/bridge.py)",
+      "Bash(python -m py_compile app/api/order.py)"
     ]
   }
 }

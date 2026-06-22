@@ -87,19 +87,24 @@ async def place_order(order: OrderRequest, request: Request):
             detail={"error_id": e.error_id, "error_msg": e.error_msg},
         )
 
-    # result is CThostFtdcInputOrderField from OnRspOrderInsert callback
+    # result is either a CThostFtdcInputOrderField (OnRspOrderInsert path)
+    # or a CThostFtdcOrderField (OnRtnOrder push path).  Both are normalised
+    # to SimpleNamespace with a unified OrderSubmitStatus field by the client.
     p = result
 
     # Map direction enum back to string
     direction_str = "buy" if p.Direction == "0" else "sell"
 
-    # Map order status (may be 0 for newly submitted)
+    # Map order status.  Values come from either:
+    #   OrderSubmitStatus (InputOrderField)  or
+    #   OrderStatus        (OrderField, aliased to OrderSubmitStatus above)
     status_map = {
         "0": "全部成交",
         "1": "部分成交",
         "2": "未成交",
         "3": "未成交队列中",
         "5": "已撤单",
+        "a": "报单已提交",  # broker acknowledgment (OnRtnOrder first push)
     }
     order_status = status_map.get(str(p.OrderSubmitStatus), "未知")
 

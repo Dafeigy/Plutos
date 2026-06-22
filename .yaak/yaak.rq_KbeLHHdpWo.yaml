@@ -1,0 +1,33 @@
+type: http_request
+model: http_request
+id: rq_KbeLHHdpWo
+createdAt: 2026-06-22T12:26:21.522118900
+updatedAt: 2026-06-22T16:15:18.731009900
+workspaceId: wk_NS4Qph2XFE
+folderId: null
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers: []
+method: GET
+name: 合约价格查询
+sortPriority: -1782131131389.0
+url: http://localhost:8000/market/ag2607/price
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

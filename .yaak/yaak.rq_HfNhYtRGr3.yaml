@@ -1,0 +1,33 @@
+type: http_request
+model: http_request
+id: rq_HfNhYtRGr3
+createdAt: 2026-06-22T12:25:56.927778
+updatedAt: 2026-06-22T16:08:39.699394
+workspaceId: wk_NS4Qph2XFE
+folderId: null
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers: []
+method: GET
+name: 个人余额查询
+sortPriority: -1782131131389.0
+url: http://localhost:8000/account/balance
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0
