@@ -1,0 +1,172 @@
+"""
+Core bridge between CTP's callback-driven threads and FastAPI's async event loop.
+
+CTP delivers results via callbacks running in CTP's own internal threads.
+FastAPI route handlers are async coroutines.  The bridge uses
+concurrent.futures.Future (thread-safe) + asyncio.wrap_future() to connect them.
+"""
+
+import logging
+import threading
+import time
+from concurrent.futures import Future
+from dataclasses import dataclass
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ── Exceptions ───────────────────────────────────────────────────────────────
+
+class CTPError(Exception):
+    """Carries a CTP error code and message across thread boundaries."""
+
+    def __init__(self, error_id: int, error_msg: str):
+        self.error_id = error_id
+        self.error_msg = error_msg
+        super().__init__(f"CTP Error {error_id}: {error_msg}")
+
+
+# ── Trader State ─────────────────────────────────────────────────────────────
+
+@dataclass
+class TraderState:
+    """Login session state shared between TraderClient and CTP callbacks."""
+
+    front_id: int = 0
+    session_id: int = 0
+    trading_day: str = ""
+    order_ref: int = 1
+    logged_in: bool = False
+
+
+# ── Future Store ─────────────────────────────────────────────────────────────
+
+class FutureStore:
+    """
+    Thread-safe registry of pending Futures, keyed by request_id.
+
+    CTP queries return multiple records: each intermediate callback delivers one
+    record, and the final callback (bIsLast=True) signals completion.  This store
+    accumulates records in a list and resolves the Future with the full list on
+    the final callback.
+
+    A background daemon thread sweeps for expired Futures and times them out.
+    """
+
+    def __init__(self, default_timeout: float = 10.0):
+        self._default_timeout = default_timeout
+        self._lock = threading.Lock()
+        self._store: dict[int, Future] = {}
+        self._accumulators: dict[int, list[Any]] = {}
+        self._timestamps: dict[int, float] = {}
+        # Secondary index for order-error mapping (keyed by OrderRef string)
+        self._order_ref_map: dict[str, int] = {}
+        self._running = False
+        self._cleanup_thread: Optional[threading.Thread] = None
+
+    # ── Lifecycle ────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        self._running = True
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop, daemon=True, name="future-store-cleanup"
+        )
+        self._cleanup_thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+
+    # ── Future management ────────────────────────────────────────────────
+
+    def create(self, request_id: int, timeout: Optional[float] = None) -> Future:
+        """Register a new Future and return it."""
+        future: Future = Future()
+        with self._lock:
+            self._store[request_id] = future
+            self._accumulators[request_id] = []
+            self._timestamps[request_id] = time.monotonic()
+        return future
+
+    def create_with_order_ref(
+        self, request_id: int, order_ref: str, timeout: Optional[float] = None
+    ) -> Future:
+        """Register a new Future and also index it by OrderRef (for order error callbacks)."""
+        future = self.create(request_id, timeout=timeout)
+        with self._lock:
+            self._order_ref_map[order_ref] = request_id
+        return future
+
+    def accumulate(self, request_id: int, item: Any) -> None:
+        """Append an intermediate result record (called from CTP callback)."""
+        with self._lock:
+            if request_id in self._accumulators:
+                self._accumulators[request_id].append(item)
+
+    def resolve_with_accumulator(self, request_id: int) -> None:
+        """Resolve the Future with the accumulated list of records."""
+        with self._lock:
+            future = self._store.pop(request_id, None)
+            self._timestamps.pop(request_id, None)
+            items = self._accumulators.pop(request_id, [])
+        if future and not future.done():
+            future.set_result(items)
+
+    def resolve_direct(self, request_id: int, result: Any) -> None:
+        """Resolve the Future with a single value (not an accumulated list)."""
+        with self._lock:
+            future = self._store.pop(request_id, None)
+            self._timestamps.pop(request_id, None)
+            self._accumulators.pop(request_id, None)
+        if future and not future.done():
+            future.set_result(result)
+
+    def reject(self, request_id: int, error_id: int, error_msg: str) -> None:
+        """Reject the Future with a CTPError."""
+        with self._lock:
+            future = self._store.pop(request_id, None)
+            self._timestamps.pop(request_id, None)
+            self._accumulators.pop(request_id, None)
+        if future and not future.done():
+            future.set_exception(CTPError(error_id, error_msg))
+
+    def reject_by_order_ref(self, order_ref: str, error_id: int, error_msg: str) -> bool:
+        """
+        Reject a Future by OrderRef (for OnErrRtnOrderInsert which lacks nRequestID).
+        Returns True if a matching Future was found, False otherwise.
+        """
+        with self._lock:
+            request_id = self._order_ref_map.pop(order_ref, None)
+        if request_id is not None:
+            self.reject(request_id, error_id, error_msg)
+            return True
+        return False
+
+    # ── Cleanup ──────────────────────────────────────────────────────────
+
+    def _cleanup_loop(self) -> None:
+        while self._running:
+            timeout = self._default_timeout
+            now = time.monotonic()
+            with self._lock:
+                expired = [
+                    rid
+                    for rid, ts in self._timestamps.items()
+                    if now - ts > timeout
+                ]
+            for rid in expired:
+                with self._lock:
+                    future = self._store.pop(rid, None)
+                    self._timestamps.pop(rid, None)
+                    self._accumulators.pop(rid, None)
+                    # Also clean up order_ref_map entries pointing to this rid
+                    refs_to_remove = [
+                        ref for ref, r in self._order_ref_map.items() if r == rid
+                    ]
+                    for ref in refs_to_remove:
+                        del self._order_ref_map[ref]
+                if future and not future.done():
+                    future.set_exception(
+                        TimeoutError(f"Request {rid} timed out after {timeout}s")
+                    )
+            time.sleep(1.0)
