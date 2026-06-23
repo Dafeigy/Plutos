@@ -54,6 +54,26 @@ class OrderResponse(BaseModel):
     status_msg: str
 
 
+# ── Position ──────────────────────────────────────────────────────────────────
+
+class PositionResponse(BaseModel):
+    instrument_id: str
+    exchange_id: str = ""
+    direction: str               # "long" / "short"
+    position: int                # total position
+    yd_position: int = 0         # yesterday's position
+    today_position: int = 0      # today's opened position
+    available: int = 0           # position not frozen (open-close available)
+    long_frozen: int = 0
+    short_frozen: int = 0
+    use_margin: float = 0.0
+    position_cost: float = 0.0
+    open_cost: float = 0.0
+    settlement_price: float = 0.0
+    close_profit: float = 0.0
+    commission: float = 0.0
+
+
 class TradeItem(BaseModel):
     trade_id: str = ""
     price: float = 0.0
@@ -61,6 +81,10 @@ class TradeItem(BaseModel):
     direction: str = ""
     offset_flag: str = ""
     trade_time: str = ""
+
+
+class OrderLookupRequest(BaseModel):
+    order_sys_id: str = Field(..., min_length=1, description="Exchange-assigned order system ID")
 
 
 class OrderDetailResponse(BaseModel):

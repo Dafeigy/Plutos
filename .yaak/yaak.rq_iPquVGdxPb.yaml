@@ -1,8 +1,8 @@
 type: http_request
 model: http_request
-id: rq_EqLk8GD2wN
-createdAt: 2026-06-23T06:54:33.132648234
-updatedAt: 2026-06-23T08:11:33.559746458
+id: rq_iPquVGdxPb
+createdAt: 2026-06-23T08:11:54.510371607
+updatedAt: 2026-06-23T08:31:37.066591513
 workspaceId: wk_NS4Qph2XFE
 folderId: null
 authentication: {}
@@ -12,9 +12,9 @@ bodyType: null
 description: ''
 headers: []
 method: GET
-name: 查询下单结果
+name: 精细查询下单结果
 sortPriority: -1782131131389.0
-url: http://localhost:8000/order/1
+url: http://localhost:8000/order/by-sysid/        6284
 urlParameters: []
 settingSendCookies:
   enabled: false

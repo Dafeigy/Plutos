@@ -139,7 +139,133 @@ Content-Type: application/json
 | 未成交队列中 | 订单在队列中等待 |
 | 已撤单 | 订单已撤销 |
 
-### 4. 健康检查
+### 4. 查询持仓
+
+```bash
+# 查询全部持仓
+GET /positions
+
+# 按合约过滤
+GET /positions?instrument_id=ag2607
+```
+
+**响应示例：**
+
+```json
+[
+  {
+    "instrument_id": "ag2607",
+    "exchange_id": "SHFE",
+    "direction": "short",
+    "position": 1,
+    "yd_position": 0,
+    "today_position": 1,
+    "available": 1,
+    "long_frozen": 0,
+    "short_frozen": 0,
+    "use_margin": 45409.05,
+    "position_cost": 238995.0,
+    "open_cost": 238995.0,
+    "settlement_price": 15989.0,
+    "close_profit": 0.0,
+    "commission": 2.39495
+  }
+]
+```
+
+| 字段 | 说明 |
+|------|------|
+| `direction` | 持仓方向：`long` 多头 / `short` 空头 |
+| `position` | 总持仓（手） |
+| `yd_position` | 昨仓（昨日结算后遗留） |
+| `today_position` | 今仓（当日开仓） |
+| `available` | 可平仓数量（已扣除冻结部分） |
+| `long_frozen` / `short_frozen` | 多头/空头冻结量 |
+| `use_margin` | 占用保证金 |
+| `position_cost` | 持仓成本 |
+| `open_cost` | 开仓成本 |
+| `settlement_price` | 昨结算价 |
+| `close_profit` | 平仓盈亏 |
+| `commission` | 手续费 |
+
+> 空持仓（`position = 0`）不会出现在返回结果中。
+
+### 5. 查询委托
+
+提供两种查找方式：
+
+**按 OrderRef（会话内引用号）**
+
+```bash
+GET /order/{order_ref}
+```
+
+OrderRef 是 `POST /order` 响应中返回的引用号，仅当前会话有效。优先读取内存缓存，缓存未命中时回退到 CTP 全量查询。
+
+**按 OrderSysID（交易所系统编号）**
+
+```bash
+POST /order/lookup
+Content-Type: application/json
+
+{
+  "order_sys_id": "ORD20240622_001"
+}
+```
+
+OrderSysID 是交易所分配的全局唯一编号，重启服务后仍可查询。ID 通过请求体传递（URL 路径可能包含空格不适用）。
+
+**响应示例：**
+
+```json
+{
+  "order_ref": "1",
+  "order_sys_id": "ORD20240622_001",
+  "instrument_id": "ag2607",
+  "exchange_id": "SHFE",
+  "direction": "buy",
+  "offset_flag": "open",
+  "price": 8000.0,
+  "volume_original": 1,
+  "volume_traded": 1,
+  "order_status": "全部成交",
+  "status_msg": "全部成交",
+  "insert_time": "09:30:00",
+  "update_time": "09:30:01",
+  "cancel_time": "",
+  "trades": [
+    {
+      "trade_id": "T20240622_001",
+      "price": 8000.0,
+      "volume": 1,
+      "direction": "buy",
+      "offset_flag": "open",
+      "trade_time": "09:30:01"
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `volume_original` | 原始委托量 |
+| `volume_traded` | 已成交量 |
+| `order_status` | 报单状态（见下方状态表） |
+| `insert_time` / `update_time` / `cancel_time` | 时间戳 |
+| `trades` | 关联的成交明细列表 |
+
+委托状态说明：
+
+| 状态值 | 说明 |
+|--------|------|
+| 全部成交 | 订单全部成交 |
+| 部分成交 | 订单部分成交 |
+| 未成交 | 订单未成交 |
+| 未成交队列中 | 订单在队列中等待 |
+| 已撤单 | 订单已撤销 |
+| 报单已提交 | 经纪商已确认收到（等待交易所受理） |
+
+### 6. 健康检查
 
 ```bash
 GET /health
@@ -187,7 +313,8 @@ Plutos/
 │   └── api/
 │       ├── account.py        # GET  /account/balance
 │       ├── market.py         # GET  /market/{id}/price
-│       └── order.py          # POST /order
+│       ├── order.py          # POST /order, GET /order/{ref}, POST /order/lookup
+│       └── position.py       # GET  /positions
 ├── docs/
 │   └── architecture.md       # 系统架构设计文档
 ├── requirements.txt

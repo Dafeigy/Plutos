@@ -2,7 +2,7 @@ type: http_request
 model: http_request
 id: rq_J9hmRyje7n
 createdAt: 2026-06-22T16:13:29.213430600
-updatedAt: 2026-06-23T06:53:48.418308509
+updatedAt: 2026-06-23T08:11:16.748699650
 workspaceId: wk_NS4Qph2XFE
 folderId: null
 authentication: {}
@@ -13,7 +13,7 @@ body:
       "instrument_id": "ag2607",
       "direction": "sell",
       "offset_flag": "open",
-      "price": 15052.0,
+      "price": 15933.0,
       "volume": 1
     }
 bodyType: application/json

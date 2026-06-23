@@ -20,7 +20,7 @@ from .config import Settings
 from .ctp.bridge import FutureStore, OrderCache
 from .ctp.trader_client import TraderClient
 from .ctp.md_client import MdClient
-from .api import account, market, order
+from .api import account, market, order, position
 
 logging.basicConfig(
     level=logging.INFO,
@@ -113,6 +113,7 @@ app = FastAPI(
 app.include_router(account.router)
 app.include_router(market.router)
 app.include_router(order.router)
+app.include_router(position.router)
 
 
 @app.get("/health")

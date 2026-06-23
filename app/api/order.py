@@ -5,7 +5,7 @@ import logging
 import re
 from fastapi import APIRouter, Request, HTTPException
 
-from ..models import OrderRequest, OrderResponse, OrderDetailResponse, TradeItem
+from ..models import OrderRequest, OrderResponse, OrderLookupRequest, OrderDetailResponse, TradeItem
 from ..ctp.bridge import CTPError
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ async def get_order(order_ref: str, request: Request):
     Reads from the push-driven memory cache first.  Falls back to a CTP
     query if the order is not cached (e.g. after a service restart).
 
-    Prefer ``GET /order/by-sysid/{order_sys_id}`` for cross-session lookups
+    Prefer ``POST /order/lookup`` for cross-session lookups
     — OrderSysID is exchange-assigned and globally unique.
     """
     cache = request.app.state.order_cache
@@ -283,34 +283,34 @@ async def get_order(order_ref: str, request: Request):
     return _build_detail(match, trades)
 
 
-@router.get("/order/by-sysid/{order_sys_id}", response_model=OrderDetailResponse)
-async def get_order_by_sysid(order_sys_id: str, request: Request):
+@router.post("/order/lookup", response_model=OrderDetailResponse)
+async def lookup_order(body: OrderLookupRequest, request: Request):
     """
     Return order state keyed by OrderSysID (exchange-assigned, globally unique).
 
     OrderSysID survives service restarts — use this endpoint for reliable
     cross-session lookups.  It is only available after the exchange accepts
     the order (unlike OrderRef which is available immediately).
+
+    The ID is passed in the request body because exchange-assigned identifiers
+    may contain whitespace, which is fragile in URL path segments.
     """
+    sysid = body.order_sys_id
     cache = request.app.state.order_cache
 
     # 1. Check cache via sysid index
-    cached = cache.get_by_sysid(order_sys_id)
+    cached = cache.get_by_sysid(sysid)
     if cached is not None:
-        trades = cache.get_trades_by_sysid(order_sys_id)
+        trades = cache.get_trades_by_sysid(sysid)
         return _build_detail(cached, trades)
 
     # 2. Fallback: query CTP
-    logger.info(f"OrderSysID={order_sys_id} not in cache, querying CTP...")
-    match, trades = await _fallback_lookup(request, order_sys_id, by="sysid")
+    logger.info(f"OrderSysID={sysid} not in cache, querying CTP...")
+    match, trades = await _fallback_lookup(request, sysid, by="sysid")
 
     # Populate cache under both keys
     order_ref = match.get("OrderRef", "")
-    sysid = match.get("OrderSysID", "")
     cache.put(order_ref, match)
     cache.put_trades(order_ref, trades)
-    if sysid and not cache.get_by_sysid(sysid):
-        # put() above already sets the sysid index, but re-put to be explicit
-        pass
 
     return _build_detail(match, trades)

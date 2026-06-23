@@ -124,11 +124,17 @@ acceptance).
 
 New reader methods: `get_by_sysid()`, `get_trades_by_sysid()`.
 
-**`GET /order/by-sysid/{order_sys_id}`** (order.py):
+**`GET /order/by-sysid/{order_sys_id}`** (order.py) → later replaced by **`POST /order/lookup`**:
 
 Mirrors `GET /order/{order_ref}` but indexes by `OrderSysID`.  Cache hit: uses
 the sysid→ref index.  Cache miss: fallback queries iterate all orders and match
 on `OrderSysID` instead of `OrderRef`.
+
+The sysid endpoint was changed from `GET /order/by-sysid/{order_sys_id}` to
+`POST /order/lookup` with a JSON body `{"order_sys_id": "..."}` because
+exchange-assigned OrderSysID values can contain whitespace, which is fragile in
+URL path segments and requires percent-encoding.  JSON bodies don't have this
+problem.
 
 **Shared `_fallback_lookup()` helper** (order.py):
 
@@ -141,7 +147,7 @@ cache miss, avoiding copy-paste drift.
 | Endpoint | Key | Scope | Best for |
 |---|---|---|---|
 | `GET /order/{order_ref}` | `OrderRef` | Session | Immediate polling right after submit (OrderRef is available instantly) |
-| `GET /order/by-sysid/{order_sys_id}` | `OrderSysID` | Global | Cross-restart lookups, persistent storage, audit trails |
+| `POST /order/lookup` | `OrderSysID` (body) | Global | Cross-restart lookups, persistent storage, audit trails |
 
 Callers should switch from OrderRef to OrderSysID once the exchange assigns
 one — typically by the second `OnRtnOrder` push.
