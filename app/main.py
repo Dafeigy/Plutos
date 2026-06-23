@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .config import Settings
-from .ctp.bridge import FutureStore
+from .ctp.bridge import FutureStore, OrderCache
 from .ctp.trader_client import TraderClient
 from .ctp.md_client import MdClient
 from .api import account, market, order
@@ -45,9 +45,12 @@ async def lifespan(app: FastAPI):
         f"FutureStores started (query timeout={settings.DEFAULT_TIMEOUT}s, order timeout=15s)"
     )
 
+    # In-memory order state cache (updated by OnRtnOrder/OnRtnTrade pushes)
+    order_cache = OrderCache()
+
     # Create and connect CTP clients
     md_client = MdClient(settings)
-    trader_client = TraderClient(settings, query_store, order_store)
+    trader_client = TraderClient(settings, query_store, order_store, order_cache)
 
     # 1. Market data client
     logger.info("Connecting to market data front...")
@@ -85,6 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.trader_client = trader_client
     app.state.query_store = query_store
     app.state.order_store = order_store
+    app.state.order_cache = order_cache
 
     logger.info("Plutos started successfully.")
     yield  # ── Server running ────────────────────────────────────────────────

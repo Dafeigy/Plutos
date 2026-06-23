@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from openctp_ctp import thosttraderapi as tdapi
 
-from .bridge import CTPError, FutureStore, TraderState
+from .bridge import CTPError, FutureStore, OrderCache, TraderState
 
 
 def _copy_ctp_struct(item) -> SimpleNamespace:
@@ -65,6 +65,7 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
         settings,
         query_store: FutureStore,
         order_store: FutureStore,
+        order_cache: OrderCache,
     ):
         super().__init__()
 
@@ -72,6 +73,7 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
         self._query_store = query_store
         self._order_store = order_store
         self._state = TraderState()
+        self._order_cache = order_cache
 
         self._request_counter = 0
         self._counter_lock = threading.Lock()
@@ -304,7 +306,11 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
             return
         if pInputOrder is not None and bIsLast:
             # Copy immediately — same memory-reuse issue as query callbacks.
-            self._order_store.resolve_direct(nRequestID, _copy_ctp_struct(pInputOrder))
+            snapshot = _copy_ctp_struct(pInputOrder)
+            # CThostFtdcInputOrderField has OrderSubmitStatus natively,
+            # but order.py reads it regardless.  Ensure it's present.
+            self._order_cache.update_order(snapshot)
+            self._order_store.resolve_direct(nRequestID, snapshot)
 
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
         """
@@ -338,24 +344,29 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
 
     def OnRtnOrder(self, pOrder):
         """Push notification: order status update (trade confirmation, cancel, etc.)."""
-        logger.info(
-            f"OnRtnOrder: InstrumentID={pOrder.InstrumentID} "
-            f"OrderRef={pOrder.OrderRef} OrderSysID={pOrder.OrderSysID} "
-            f"OrderStatus={pOrder.OrderStatus} StatusMsg={pOrder.StatusMsg}"
-        )
-
-        # Resolve the pending order Future on the first status push.
-        # Some CTP environments (or network conditions) deliver order
-        # confirmation exclusively via OnRtnOrder rather than OnRspOrderInsert.
-        # Without this the Future sits unresolved until the 15 s timeout,
-        # returning HTTP 408 even though the order was accepted and may have
-        # already filled (as the user observed with AG2607).
+        # Copy immediately — CTP reuses the underlying C memory after this
+        # callback returns.
         snapshot = _copy_ctp_struct(pOrder)
         # CThostFtdcOrderField exposes order state via OrderStatus;
         # order.py reads OrderSubmitStatus.  Alias so both paths work.
         snapshot.OrderSubmitStatus = snapshot.OrderStatus
 
-        found = self._order_store.resolve_by_order_ref(snapshot.OrderRef, snapshot)
+        logger.info(
+            f"OnRtnOrder: InstrumentID={snapshot.InstrumentID} "
+            f"OrderRef={snapshot.OrderRef} OrderSysID={snapshot.OrderSysID} "
+            f"OrderStatus={snapshot.OrderStatus} StatusMsg={snapshot.StatusMsg}"
+        )
+
+        # Always update the shared cache so GET /order/{ref} sees the latest
+        # state — not just the first push.
+        self._order_cache.update_order(snapshot)
+
+        # On the first push, resolve the pending order Future so POST /order
+        # doesn't time out waiting for a response that never arrives via
+        # OnRspOrderInsert (which some CTP environments skip).
+        found = self._order_store.resolve_by_order_ref(
+            snapshot.OrderRef, snapshot
+        )
         if found:
             logger.info(
                 f"Order {snapshot.OrderRef} resolved via OnRtnOrder push "
@@ -364,11 +375,15 @@ class TraderClient(tdapi.CThostFtdcTraderSpi):
 
     def OnRtnTrade(self, pTrade):
         """Push notification: trade fill."""
+        snapshot = _copy_ctp_struct(pTrade)
         logger.info(
-            f"OnRtnTrade: InstrumentID={pTrade.InstrumentID} "
-            f"Price={pTrade.Price} Volume={pTrade.Volume} "
-            f"OrderRef={pTrade.OrderRef}"
+            f"OnRtnTrade: InstrumentID={snapshot.InstrumentID} "
+            f"Price={snapshot.Price} Volume={snapshot.Volume} "
+            f"OrderRef={snapshot.OrderRef}"
         )
+        # Cache every trade fill so GET /order/{ref} can list them.
+        if snapshot.OrderRef:
+            self._order_cache.add_trade(snapshot.OrderRef, snapshot)
 
     def OnRtnInstrumentStatus(self, pInstrumentStatus):
         """Push notification: instrument trading status change."""

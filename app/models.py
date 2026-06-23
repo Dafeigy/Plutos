@@ -52,3 +52,30 @@ class OrderResponse(BaseModel):
     volume: int
     order_status: str
     status_msg: str
+
+
+class TradeItem(BaseModel):
+    trade_id: str = ""
+    price: float = 0.0
+    volume: int = 0
+    direction: str = ""
+    offset_flag: str = ""
+    trade_time: str = ""
+
+
+class OrderDetailResponse(BaseModel):
+    order_ref: str
+    order_sys_id: str
+    instrument_id: str
+    exchange_id: str = ""
+    direction: str
+    offset_flag: str = ""
+    price: float
+    volume_original: int
+    volume_traded: int = 0
+    order_status: str
+    status_msg: str
+    insert_time: str = ""
+    update_time: str = ""
+    cancel_time: str = ""
+    trades: list[TradeItem] = []

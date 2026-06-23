@@ -189,3 +189,90 @@ class FutureStore:
                         TimeoutError(f"Request {rid} timed out after {timeout}s")
                     )
             time.sleep(1.0)
+
+
+# ── Order Cache ─────────────────────────────────────────────────────────────
+
+class OrderCache:
+    """
+    Thread-safe cache of order state, updated by OnRtnOrder / OnRtnTrade pushes.
+
+    Stores snapshot dicts (not CTP swig wrappers — snapshots are already copied
+    via _copy_ctp_struct before reaching this cache).
+
+    Dual-indexed:
+      - by OrderRef (session-scoped, available immediately)
+      - by OrderSysID (exchange-assigned, globally unique, survives restarts)
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._orders: dict[str, dict] = {}       # OrderRef  → order dict
+        self._trades: dict[str, list[dict]] = {} # OrderRef  → trade list
+        self._by_sysid: dict[str, str] = {}      # OrderSysID → OrderRef
+
+    # ── Writers (called from CTP callbacks) ───────────────────────────────
+
+    def update_order(self, snapshot) -> None:
+        """Store an order snapshot dict (from vars(snapshot) of a copied struct)."""
+        data = vars(snapshot) if not isinstance(snapshot, dict) else snapshot
+        order_ref = data.get("OrderRef", "")
+        if not order_ref:
+            return
+        with self._lock:
+            self._orders[order_ref] = data
+            # Populate sysid index once the exchange assigns an ID
+            sysid = data.get("OrderSysID", "")
+            if sysid:
+                self._by_sysid[sysid] = order_ref
+
+    def add_trade(self, order_ref: str, snapshot) -> None:
+        """Append a trade snapshot dict, keyed by OrderRef."""
+        if not order_ref:
+            return
+        data = vars(snapshot) if not isinstance(snapshot, dict) else snapshot
+        with self._lock:
+            self._trades.setdefault(order_ref, []).append(data)
+
+    # ── Readers (called from async route handlers) ────────────────────────
+
+    def get(self, order_ref: str) -> dict | None:
+        """Return the latest order snapshot by OrderRef, or None."""
+        with self._lock:
+            return self._orders.get(order_ref)
+
+    def get_by_sysid(self, sysid: str) -> dict | None:
+        """Return the latest order snapshot by OrderSysID, or None."""
+        with self._lock:
+            order_ref = self._by_sysid.get(sysid)
+            if order_ref:
+                return self._orders.get(order_ref)
+            return None
+
+    def get_trades(self, order_ref: str) -> list[dict]:
+        """Return all trade snapshots for an order (empty list if none)."""
+        with self._lock:
+            return list(self._trades.get(order_ref, []))
+
+    def get_trades_by_sysid(self, sysid: str) -> list[dict]:
+        """Return trades for an order, looked up by OrderSysID."""
+        with self._lock:
+            order_ref = self._by_sysid.get(sysid)
+            if order_ref:
+                return list(self._trades.get(order_ref, []))
+            return []
+
+    # ── Explicit storage (fallback query path) ────────────────────────────
+
+    def put(self, order_ref: str, order_data: dict) -> None:
+        """Explicitly store an order dict (used by fallback query path)."""
+        with self._lock:
+            self._orders[order_ref] = order_data
+            sysid = order_data.get("OrderSysID", "")
+            if sysid:
+                self._by_sysid[sysid] = order_ref
+
+    def put_trades(self, order_ref: str, trade_list: list[dict]) -> None:
+        """Explicitly store trade dicts (used by fallback query path)."""
+        with self._lock:
+            self._trades[order_ref] = list(trade_list)

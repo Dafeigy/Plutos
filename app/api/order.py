@@ -5,7 +5,7 @@ import logging
 import re
 from fastapi import APIRouter, Request, HTTPException
 
-from ..models import OrderRequest, OrderResponse
+from ..models import OrderRequest, OrderResponse, OrderDetailResponse, TradeItem
 from ..ctp.bridge import CTPError
 
 logger = logging.getLogger(__name__)
@@ -118,3 +118,199 @@ async def place_order(order: OrderRequest, request: Request):
         order_status=order_status,
         status_msg=getattr(p, "StatusMsg", "委托已提交"),
     )
+
+
+# ── Shared field mappers ──────────────────────────────────────────────────────
+
+def _map_direction(c: str) -> str:
+    """CTP direction enum → human label."""
+    return "buy" if c == "0" else "sell"
+
+
+def _map_offset(c: str) -> str:
+    """CTP offset flag enum → human label."""
+    return {"0": "open", "1": "close", "3": "close_today", "4": "close_yesterday"}.get(
+        str(c), str(c)
+    )
+
+
+_ORDER_STATUS_MAP: dict[str, str] = {
+    "0": "全部成交",
+    "1": "部分成交",
+    "2": "未成交",
+    "3": "未成交队列中",
+    "5": "已撤单",
+    "a": "报单已提交",
+}
+
+
+def _map_status(c) -> str:
+    return _ORDER_STATUS_MAP.get(str(c), "未知")
+
+
+def _build_detail(order_data: dict, trades: list[dict]) -> OrderDetailResponse:
+    """Build OrderDetailResponse from cached (or fallback-queried) dict data."""
+    o = order_data
+
+    # Direction may come as raw CTP char or already-mapped string
+    direction_raw = str(o.get("Direction", "0"))
+    direction = _map_direction(direction_raw)
+
+    offset_flag = _map_offset(str(o.get("CombOffsetFlag", "0")))
+
+    # Status: prefer OrderSubmitStatus (set by our normalisation), fall back to
+    # OrderStatus.  OnRtnOrder snapshots have both fields aliased.
+    raw_status = o.get("OrderSubmitStatus", o.get("OrderStatus", ""))
+    status = _map_status(raw_status)
+
+    trade_items = [
+        TradeItem(
+            trade_id=str(t.get("TradeID", "")),
+            price=float(t.get("Price", 0)),
+            volume=int(t.get("Volume", 0)),
+            direction=_map_direction(str(t.get("Direction", "0"))),
+            offset_flag=_map_offset(str(t.get("OffsetFlag", "0"))),
+            trade_time=str(t.get("TradeTime", "")),
+        )
+        for t in trades
+    ]
+
+    return OrderDetailResponse(
+        order_ref=str(o.get("OrderRef", "")),
+        order_sys_id=str(o.get("OrderSysID", "")),
+        instrument_id=str(o.get("InstrumentID", "")),
+        exchange_id=str(o.get("ExchangeID", "")),
+        direction=direction,
+        offset_flag=offset_flag,
+        price=float(o.get("LimitPrice", 0)),
+        volume_original=int(o.get("VolumeTotalOriginal", 0)),
+        volume_traded=int(o.get("VolumeTraded", 0)),
+        order_status=status,
+        status_msg=str(o.get("StatusMsg", "")),
+        insert_time=str(o.get("InsertTime", "")),
+        update_time=str(o.get("UpdateTime", "")),
+        cancel_time=str(o.get("CancelTime", "")),
+        trades=trade_items,
+    )
+
+
+# ── Order detail ──────────────────────────────────────────────────────────────
+
+async def _fallback_lookup(request: Request, key: str, *, by: str = "order_ref"):
+    """
+    Query CTP for all orders/trades and filter by *key*.
+
+    *by* must be ``"order_ref"`` or ``"sysid"`` — controls which field is
+    matched on the returned CThostFtdcOrderField records.  Trades are matched
+    by OrderRef regardless (CTP's CThostFtdcTradeField carries OrderRef, not
+    OrderSysID).
+
+    Returns ``(order_dict, trades_list)`` or raises HTTPException.
+    """
+    trader = request.app.state.trader_client
+
+    try:
+        orders_future = trader.query_order("")
+        orders = await asyncio.wrap_future(orders_future)
+    except TimeoutError:
+        raise HTTPException(status_code=408, detail="Order query timed out")
+    except CTPError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error_id": e.error_id, "error_msg": e.error_msg},
+        )
+
+    match: dict | None = None
+    for o in orders:
+        if by == "sysid":
+            if str(getattr(o, "OrderSysID", "")) == key:
+                match = vars(o)
+                break
+        else:
+            if str(o.OrderRef) == key:
+                match = vars(o)
+                break
+
+    if match is None:
+        raise HTTPException(
+            status_code=404, detail=f"Order '{key}' not found"
+        )
+
+    order_ref = match.get("OrderRef", "")
+    trades: list[dict] = []
+    try:
+        trades_future = trader.query_trade("")
+        all_trades = await asyncio.wrap_future(trades_future)
+        trades = [
+            vars(t) for t in all_trades if str(t.OrderRef) == order_ref
+        ]
+    except (TimeoutError, CTPError):
+        logger.warning(
+            f"Trade query failed for order {key}, returning without trades"
+        )
+
+    return match, trades
+
+
+@router.get("/order/{order_ref}", response_model=OrderDetailResponse)
+async def get_order(order_ref: str, request: Request):
+    """
+    Return the latest state for a previously-submitted order, keyed by
+    OrderRef (session-scoped, available immediately on submission).
+
+    Reads from the push-driven memory cache first.  Falls back to a CTP
+    query if the order is not cached (e.g. after a service restart).
+
+    Prefer ``GET /order/by-sysid/{order_sys_id}`` for cross-session lookups
+    — OrderSysID is exchange-assigned and globally unique.
+    """
+    cache = request.app.state.order_cache
+
+    # 1. Check cache
+    cached = cache.get(order_ref)
+    if cached is not None:
+        trades = cache.get_trades(order_ref)
+        return _build_detail(cached, trades)
+
+    # 2. Fallback: query CTP
+    logger.info(f"OrderRef={order_ref} not in cache, querying CTP...")
+    match, trades = await _fallback_lookup(request, order_ref, by="order_ref")
+
+    # Populate cache so subsequent GETs hit the fast path
+    cache.put(order_ref, match)
+    cache.put_trades(match.get("OrderRef", ""), trades)
+
+    return _build_detail(match, trades)
+
+
+@router.get("/order/by-sysid/{order_sys_id}", response_model=OrderDetailResponse)
+async def get_order_by_sysid(order_sys_id: str, request: Request):
+    """
+    Return order state keyed by OrderSysID (exchange-assigned, globally unique).
+
+    OrderSysID survives service restarts — use this endpoint for reliable
+    cross-session lookups.  It is only available after the exchange accepts
+    the order (unlike OrderRef which is available immediately).
+    """
+    cache = request.app.state.order_cache
+
+    # 1. Check cache via sysid index
+    cached = cache.get_by_sysid(order_sys_id)
+    if cached is not None:
+        trades = cache.get_trades_by_sysid(order_sys_id)
+        return _build_detail(cached, trades)
+
+    # 2. Fallback: query CTP
+    logger.info(f"OrderSysID={order_sys_id} not in cache, querying CTP...")
+    match, trades = await _fallback_lookup(request, order_sys_id, by="sysid")
+
+    # Populate cache under both keys
+    order_ref = match.get("OrderRef", "")
+    sysid = match.get("OrderSysID", "")
+    cache.put(order_ref, match)
+    cache.put_trades(order_ref, trades)
+    if sysid and not cache.get_by_sysid(sysid):
+        # put() above already sets the sysid index, but re-put to be explicit
+        pass
+
+    return _build_detail(match, trades)

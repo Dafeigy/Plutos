@@ -1,32 +1,20 @@
 type: http_request
 model: http_request
-id: rq_J9hmRyje7n
-createdAt: 2026-06-22T16:13:29.213430600
-updatedAt: 2026-06-23T06:53:48.418308509
+id: rq_EqLk8GD2wN
+createdAt: 2026-06-23T06:54:33.132648234
+updatedAt: 2026-06-23T06:57:00.776978383
 workspaceId: wk_NS4Qph2XFE
 folderId: null
 authentication: {}
 authenticationType: null
-body:
-  text: |-
-    {
-      "instrument_id": "ag2607",
-      "direction": "sell",
-      "offset_flag": "open",
-      "price": 15052.0,
-      "volume": 1
-    }
-bodyType: application/json
+body: {}
+bodyType: null
 description: ''
-headers:
-- enabled: true
-  name: Content-Type
-  value: application/json
-  id: Wqk5Ti5Q3H
-method: POST
-name: 委托下单
+headers: []
+method: GET
+name: 查询下单结果
 sortPriority: -1782131131389.0
-url: http://localhost:8000/order
+url: http://localhost:8000/order/2
 urlParameters: []
 settingSendCookies:
   enabled: false
