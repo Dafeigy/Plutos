@@ -13,10 +13,14 @@ Plutos is a FastAPI service wrapping [OpenCTP](https://github.com/openctp/openct
 pip install -r requirements.txt
 
 # Configure (edit with real credentials)
-cp .env.example .env
+cp .env.example .env          # default environment
+cp .env.example .env.prod     # production overrides
+cp .env.example .env.test     # test overrides
 
-# Run dev server
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Run dev server (pick environment via APP_ENV)
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload           # uses .env
+APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000       # uses .env.prod
+APP_ENV=test uvicorn app.main:app --host 0.0.0.0 --port 8000       # uses .env.test
 
 # Health check
 curl http://localhost:8000/health

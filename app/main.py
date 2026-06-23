@@ -34,7 +34,7 @@ settings = Settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
-    logger.info("Starting Plutos...")
+    logger.info(f"Starting Plutos... (env_file={settings.model_config.get('env_file', '.env')})")
 
     # Create FutureStore instances
     query_store = FutureStore(default_timeout=settings.DEFAULT_TIMEOUT)
